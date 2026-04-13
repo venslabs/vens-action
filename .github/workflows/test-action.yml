@@ -68,10 +68,33 @@ jobs:
           set -euo pipefail
           bin_dir="${RUNNER_TEMP}/scanner-bin"
           mkdir -p "${bin_dir}"
-          case "${SCANNER_NAME}" in
-            trivy) curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b "${bin_dir}" "${SCANNER_VERSION}" ;;
-            grype) curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b "${bin_dir}" "${SCANNER_VERSION}" ;;
+          cd "${bin_dir}"
+          ver="${SCANNER_VERSION#v}"
+          case "${RUNNER_OS}" in
+            Linux)  t_os=Linux;  g_os=linux ;;
+            macOS)  t_os=macOS;  g_os=darwin ;;
           esac
+          case "${RUNNER_ARCH}" in
+            X64)    t_arch=64bit; g_arch=amd64 ;;
+            ARM64)  t_arch=ARM64; g_arch=arm64 ;;
+          esac
+          case "${SCANNER_NAME}" in
+            trivy)
+              tarball="trivy_${ver}_${t_os}-${t_arch}.tar.gz"
+              checksums="trivy_${ver}_checksums.txt"
+              base="https://github.com/aquasecurity/trivy/releases/download/${SCANNER_VERSION}"
+              ;;
+            grype)
+              tarball="grype_${ver}_${g_os}_${g_arch}.tar.gz"
+              checksums="grype_${ver}_checksums.txt"
+              base="https://github.com/anchore/grype/releases/download/${SCANNER_VERSION}"
+              ;;
+          esac
+          curl -fsSL --proto '=https' --tlsv1.2 -o "${tarball}" "${base}/${tarball}"
+          curl -fsSL --proto '=https' --tlsv1.2 -o checksums.txt "${base}/${checksums}"
+          grep -F "${tarball}" checksums.txt | shasum -a 256 -c -
+          tar -xzf "${tarball}" "${SCANNER_NAME}"
+          chmod +x "${SCANNER_NAME}"
           echo "bin=${bin_dir}/${SCANNER_NAME}" >> "${GITHUB_OUTPUT}"
 
       - name: Scan ${{ env.SCAN_IMAGE }}
