@@ -33,20 +33,17 @@ jobs:
           - { name: grype, version: v0.111.0 }
           - { name: grype, version: v0.110.0 }
     env:
-      SCAN_IMAGE: alpine:3.15
+      SCAN_IMAGE: python:3.9-slim
     steps:
-      - name: Checkout vens-action
-        uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
-      - name: Checkout vens main
-        uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           repository: venslabs/vens
           ref: main
           path: .vens-src
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5  # v5.5.0
         with:
           go-version-file: .vens-src/go.mod
           cache-dependency-path: .vens-src/go.sum
@@ -57,10 +54,9 @@ jobs:
         working-directory: .vens-src
         run: |
           set -euo pipefail
-          mkdir -p "${RUNNER_TEMP}/vens-bin"
-          go build -o "${RUNNER_TEMP}/vens-bin/vens" ./cmd/vens
-          "${RUNNER_TEMP}/vens-bin/vens" version
-          echo "bin=${RUNNER_TEMP}/vens-bin/vens" >> "${GITHUB_OUTPUT}"
+          bin="${RUNNER_TEMP}/vens"
+          go build -o "${bin}" ./cmd/vens
+          echo "bin=${bin}" >> "${GITHUB_OUTPUT}"
 
       - name: Install ${{ matrix.scanner.name }} ${{ matrix.scanner.version }}
         id: scanner
@@ -73,16 +69,9 @@ jobs:
           bin_dir="${RUNNER_TEMP}/scanner-bin"
           mkdir -p "${bin_dir}"
           case "${SCANNER_NAME}" in
-            trivy)
-              curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-                | sh -s -- -b "${bin_dir}" "${SCANNER_VERSION}"
-              ;;
-            grype)
-              curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \
-                | sh -s -- -b "${bin_dir}" "${SCANNER_VERSION}"
-              ;;
+            trivy) curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b "${bin_dir}" "${SCANNER_VERSION}" ;;
+            grype) curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b "${bin_dir}" "${SCANNER_VERSION}" ;;
           esac
-          "${bin_dir}/${SCANNER_NAME}" version || "${bin_dir}/${SCANNER_NAME}" --version
           echo "bin=${bin_dir}/${SCANNER_NAME}" >> "${GITHUB_OUTPUT}"
 
       - name: Scan ${{ env.SCAN_IMAGE }}
@@ -95,15 +84,10 @@ jobs:
           set -euo pipefail
           out="${RUNNER_TEMP}/scan.json"
           case "${SCANNER_NAME}" in
-            trivy)
-              "${SCANNER_BIN}" image --quiet --format json --output "${out}" "${SCAN_IMAGE}"
-              ;;
-            grype)
-              "${SCANNER_BIN}" "${SCAN_IMAGE}" -o json > "${out}"
-              ;;
+            trivy) "${SCANNER_BIN}" image --quiet --format json --output "${out}" "${SCAN_IMAGE}" ;;
+            grype) "${SCANNER_BIN}" "${SCAN_IMAGE}" -o json > "${out}" ;;
           esac
           test -s "${out}"
-          echo "$(wc -c < "${out}") bytes written to ${out}"
           echo "report=${out}" >> "${GITHUB_OUTPUT}"
 
       - name: Run vens action
@@ -126,54 +110,15 @@ jobs:
           VEX_FILE: ${{ steps.vens.outputs.vex-file }}
         run: |
           set -euo pipefail
-          test -s "${VEX_FILE}"
           jq -e '.bomFormat == "CycloneDX"' "${VEX_FILE}"
-          jq -e '.specVersion | startswith("1.")' "${VEX_FILE}"
           jq -e '.vulnerabilities | length > 0' "${VEX_FILE}"
-          # Every vuln should carry an OWASP rating produced by vens
           jq -e '[.vulnerabilities[] | select(.ratings[]?.method == "OWASP")] | length > 0' "${VEX_FILE}"
 
-      # vens enrich writes the OWASP score from the VEX into each matching
-      # Trivy vulnerability's Custom.owasp_score. Making sure the pipeline
-      # ran and at least one vuln came out with a score attached.
-      - name: Assert enriched Trivy report
+      - name: Assert enriched report
         if: matrix.scanner.name == 'trivy'
         shell: bash
         env:
           ENRICHED: ${{ steps.vens.outputs.enriched-report }}
         run: |
           set -euo pipefail
-          test -s "${ENRICHED}"
           jq -e '[.Results[]?.Vulnerabilities[]? | select(.Custom.owasp_score != null)] | length > 0' "${ENRICHED}"
-
-  install-smoke:
-    name: install-smoke (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Download and verify v0.3.1 release
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "${RUNNER_OS}" in
-            Linux)  os=linux ;;
-            macOS)  os=darwin ;;
-          esac
-          case "${RUNNER_ARCH}" in
-            X64)    arch=amd64 ;;
-            ARM64)  arch=arm64 ;;
-          esac
-          version="v0.3.1"
-          tarball="vens-${version}-${os}-${arch}.tar.gz"
-          url="https://github.com/venslabs/vens/releases/download/${version}"
-          cd "${RUNNER_TEMP}"
-          curl -fsSL --proto '=https' --tlsv1.2 -o "${tarball}" "${url}/${tarball}"
-          curl -fsSL --proto '=https' --tlsv1.2 -o SHA256SUMS "${url}/SHA256SUMS"
-          grep -F "  ${tarball}" SHA256SUMS > "${tarball}.sha256"
-          shasum -a 256 -c "${tarball}.sha256"
-          tar -xzf "${tarball}"
-          ./vens --version

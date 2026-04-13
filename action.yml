@@ -7,12 +7,10 @@ branding:
 
 inputs:
   version:
-    description: "vens release tag to install (e.g. v0.3.1). Ignored when 'bin-path' is set. 'latest' is not yet supported."
-    required: false
+    description: "vens release tag to install (e.g. v0.3.1). Ignored when bin-path is set."
     default: ""
   bin-path:
-    description: "Path to a pre-installed vens binary. When set, skips download and checksum verification. Useful for air-gapped environments and custom builds."
-    required: false
+    description: "Path to a pre-installed vens binary. Skips download. Use for air-gapped runners and custom builds."
     default: ""
   config-file:
     description: "Path to config.yaml describing project context"
@@ -22,55 +20,40 @@ inputs:
     required: true
   input-format:
     description: "Scanner format: auto | trivy | grype"
-    required: false
     default: auto
   output-vex:
     description: "Output path for the generated CycloneDX VEX file"
-    required: false
-    default: vens-vex.cdx.json
+    default: ${{ runner.temp }}/vens-vex.cdx.json
   sbom-serial-number:
-    description: "BOM-Link serial of the SBOM the scan report was produced from, in 'urn:uuid:<uuid>' form. Pin one UUID per service and reuse it across runs so VEX documents stay linkable."
+    description: "SBOM BOM-Link serial in urn:uuid:<uuid> form. Pin one per service and reuse it across runs."
     required: true
   sbom-version:
     description: "BOM-Link version integer"
-    required: false
     default: "1"
   llm-provider:
-    description: "LLM backend: openai | anthropic | googleai | ollama | mock"
-    required: false
+    description: "openai | anthropic | googleai | ollama | mock"
     default: openai
   llm-model:
-    description: "Model name (mapped to <PROVIDER>_MODEL env var)"
-    required: false
+    description: "Model name (mapped to <PROVIDER>_MODEL)"
     default: ""
   llm-api-key:
     description: "API key for the selected provider. Masked in logs."
-    required: false
     default: ""
   llm-base-url:
-    description: "Custom base URL (OpenAI-compatible endpoints or Ollama host)"
-    required: false
+    description: "Custom base URL (OpenAI-compatible endpoint or Ollama host)"
     default: ""
   llm-batch-size:
-    description: "Number of CVEs per LLM request"
-    required: false
+    description: "CVEs per LLM request"
     default: "10"
   enrich:
     description: "If true, also produce an enriched Trivy report"
-    required: false
     default: "false"
   output-enriched-report:
-    description: "Output path for the enriched Trivy report (when enrich=true)"
-    required: false
-    default: vens-enriched.json
-  debug-dir:
-    description: "If set, dump LLM prompts and responses to this directory"
-    required: false
+    description: "Output path for the enriched report (when enrich=true)"
+    default: ${{ runner.temp }}/vens-enriched.json
+  fail-on-severity:
+    description: "Gate the build: fail the step when the VEX contains at least one CVE scored at or above this OWASP level (critical | high | medium | low | info). Leave empty to never fail."
     default: ""
-  working-directory:
-    description: "Working directory for the run"
-    required: false
-    default: "."
 
 outputs:
   vex-file:
@@ -80,113 +63,92 @@ outputs:
     description: "Path to the enriched Trivy report (empty when enrich=false)"
     value: ${{ steps.run.outputs.enriched-report }}
   version:
-    description: "vens version that was installed"
-    value: ${{ steps.install.outputs.version }}
+    description: "vens version that was installed (empty when bin-path is used)"
+    value: ${{ inputs.version }}
   sbom-serial-number:
-    description: "SBOM serial number that was used (useful when auto-generated)"
-    value: ${{ steps.run.outputs.sbom-serial-number }}
+    description: "SBOM serial number that was used"
+    value: ${{ inputs.sbom-serial-number }}
+  count-critical:
+    description: "Number of CVEs the VEX rated CRITICAL by OWASP (score >= 60)"
+    value: ${{ steps.run.outputs.count-critical }}
+  count-high:
+    description: "Number of CVEs the VEX rated HIGH (score >= 40)"
+    value: ${{ steps.run.outputs.count-high }}
+  count-medium:
+    description: "Number of CVEs the VEX rated MEDIUM (score >= 20)"
+    value: ${{ steps.run.outputs.count-medium }}
+  count-low:
+    description: "Number of CVEs the VEX rated LOW (score >= 5)"
+    value: ${{ steps.run.outputs.count-low }}
+  count-info:
+    description: "Number of CVEs the VEX rated INFO (score < 5)"
+    value: ${{ steps.run.outputs.count-info }}
 
 runs:
   using: composite
   steps:
-    - name: Mask secrets and guard platform
-      shell: bash
-      env:
-        INPUT_LLM_API_KEY: ${{ inputs.llm-api-key }}
-      run: |
-        set -euo pipefail
-        if [ -n "${INPUT_LLM_API_KEY}" ]; then
-          echo "::add-mask::${INPUT_LLM_API_KEY}"
-        fi
-        case "${RUNNER_OS}" in
-          Linux|macOS) ;;
-          *)
-            echo "::error::vens-action does not support ${RUNNER_OS} runners. Supported: Linux, macOS."
-            exit 1
-            ;;
-        esac
-
     - name: Install vens
-      id: install
       shell: bash
       env:
-        INPUT_VERSION: ${{ inputs.version }}
-        INPUT_BIN_PATH: ${{ inputs.bin-path }}
+        VERSION: ${{ inputs.version }}
+        BIN_PATH: ${{ inputs.bin-path }}
       run: |
         set -euo pipefail
 
-        if [ -n "${INPUT_BIN_PATH}" ]; then
-          if [ ! -x "${INPUT_BIN_PATH}" ]; then
-            echo "::error::bin-path does not exist or is not executable: ${INPUT_BIN_PATH}"
+        _safe() { printf '%s' "${1-}" | tr '\n\r' '  '; }
+
+        if [ -n "${BIN_PATH}" ]; then
+          if [ ! -x "${BIN_PATH}" ]; then
+            echo "::error::bin-path is not an executable: $(_safe "${BIN_PATH}")"
             exit 1
           fi
-          bin_dir=$(cd "$(dirname "${INPUT_BIN_PATH}")" && pwd)
+          bin_dir=$(cd "$(dirname "${BIN_PATH}")" && pwd)
           echo "${bin_dir}" >> "${GITHUB_PATH}"
-          resolved=$("${INPUT_BIN_PATH}" --version 2>&1 | awk '{for(i=1;i<=NF;i++) if ($i ~ /^v[0-9]/) {print $i; exit}}')
-          echo "bin=${INPUT_BIN_PATH}" >> "${GITHUB_OUTPUT}"
-          echo "version=${resolved:-unknown}" >> "${GITHUB_OUTPUT}"
-          echo "Using pre-installed vens at ${INPUT_BIN_PATH} (version: ${resolved:-unknown})"
+          "${BIN_PATH}" --version
           exit 0
         fi
 
-        if [ -z "${INPUT_VERSION}" ]; then
-          echo "::error::One of 'version' or 'bin-path' must be set."
+        if [ -z "${VERSION}" ]; then
+          echo "::error::one of 'version' or 'bin-path' must be set"
           exit 1
         fi
 
         case "${RUNNER_OS}" in
           Linux)  os=linux ;;
           macOS)  os=darwin ;;
+          *) echo "::error::unsupported runner OS: ${RUNNER_OS} (Linux or macOS only)"; exit 1 ;;
         esac
         case "${RUNNER_ARCH}" in
-          X64)    arch=amd64 ;;
-          ARM64)  arch=arm64 ;;
-          *)
-            echo "::error::Unsupported runner arch: ${RUNNER_ARCH}"
-            exit 1
-            ;;
+          X64)   arch=amd64 ;;
+          ARM64) arch=arm64 ;;
+          *) echo "::error::unsupported runner arch: ${RUNNER_ARCH}"; exit 1 ;;
         esac
 
-        version="${INPUT_VERSION}"
-        if [ "${version}" = "latest" ]; then
-          echo "::error::'version: latest' is not yet supported. Pin a tag like v0.3.1."
-          exit 1
-        fi
-        if ! printf '%s' "${version}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$'; then
-          echo "::error::Invalid 'version' input: ${version}. Expected semver tag like v0.3.1."
+        if ! printf '%s' "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$'; then
+          echo "::error::version must be a semver tag like v0.1.0 (got: $(_safe "${VERSION}"))"
           exit 1
         fi
 
-        tarball="vens-${version}-${os}-${arch}.tar.gz"
-        base_url="https://github.com/venslabs/vens/releases/download/${version}"
-        install_dir="${RUNNER_TEMP}/vens-${version}"
-        mkdir -p "${install_dir}"
-        cd "${install_dir}"
+        dir="${RUNNER_TEMP}/vens-${VERSION}"
+        mkdir -p "${dir}"
+        cd "${dir}"
 
-        echo "Downloading ${tarball}"
-        curl -fsSL --proto '=https' --tlsv1.2 -o "${tarball}" "${base_url}/${tarball}"
-        curl -fsSL --proto '=https' --tlsv1.2 -o SHA256SUMS "${base_url}/SHA256SUMS"
+        tarball="vens-${VERSION}-${os}-${arch}.tar.gz"
+        base="https://github.com/venslabs/vens/releases/download/${VERSION}"
 
-        echo "Verifying checksum"
-        grep -F "  ${tarball}" SHA256SUMS > "${tarball}.sha256"
-        if [ ! -s "${tarball}.sha256" ]; then
-          echo "::error::Could not find ${tarball} in SHA256SUMS"
-          exit 1
-        fi
-        shasum -a 256 -c "${tarball}.sha256"
+        curl -fsSL --proto '=https' --tlsv1.2 -o "${tarball}" "${base}/${tarball}"
+        curl -fsSL --proto '=https' --tlsv1.2 -o SHA256SUMS "${base}/SHA256SUMS"
+        grep -F "  ${tarball}" SHA256SUMS | shasum -a 256 -c -
 
         tar -xzf "${tarball}"
         chmod +x ./vens
-
-        echo "${install_dir}" >> "${GITHUB_PATH}"
-        echo "bin=${install_dir}/vens" >> "${GITHUB_OUTPUT}"
-        echo "version=${version}" >> "${GITHUB_OUTPUT}"
+        rm -f "${tarball}" SHA256SUMS
+        echo "${dir}" >> "${GITHUB_PATH}"
         ./vens --version
 
     - name: Run vens
       id: run
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
       env:
         INPUT_CONFIG_FILE: ${{ inputs.config-file }}
         INPUT_REPORT: ${{ inputs.input-report }}
@@ -198,15 +160,19 @@ runs:
         INPUT_LLM_BATCH_SIZE: ${{ inputs.llm-batch-size }}
         INPUT_ENRICH: ${{ inputs.enrich }}
         INPUT_ENRICHED_OUT: ${{ inputs.output-enriched-report }}
-        INPUT_DEBUG_DIR: ${{ inputs.debug-dir }}
         INPUT_LLM_API_KEY: ${{ inputs.llm-api-key }}
         INPUT_LLM_MODEL: ${{ inputs.llm-model }}
         INPUT_LLM_BASE_URL: ${{ inputs.llm-base-url }}
+        INPUT_FAIL_ON_SEVERITY: ${{ inputs.fail-on-severity }}
       run: |
         set -euo pipefail
 
+        _safe() { printf '%s' "${1-}" | tr '\n\r' '  '; }
+
+        command -v jq >/dev/null 2>&1 || { echo "::error::jq is required on the runner but was not found on PATH"; exit 1; }
+
         if [ -n "${INPUT_LLM_API_KEY}" ]; then
-          echo "::add-mask::${INPUT_LLM_API_KEY}"
+          echo "::add-mask::$(printf '%s' "${INPUT_LLM_API_KEY}" | tr -d '\n\r')"
         fi
 
         case "${INPUT_LLM_PROVIDER}" in
@@ -230,44 +196,70 @@ runs:
           mock)
             ;;
           *)
-            echo "::error::Unknown llm-provider: ${INPUT_LLM_PROVIDER}. Expected openai|anthropic|googleai|ollama|mock."
+            echo "::error::unknown llm-provider: $(_safe "${INPUT_LLM_PROVIDER}")"
             exit 1
             ;;
         esac
 
-        serial="${INPUT_SBOM_SERIAL}"
-        if [ -z "${serial}" ]; then
-          echo "::error::sbom-serial-number is required. Pin a stable 'urn:uuid:<uuid>' per service — see https://cyclonedx.org/capabilities/bomlink/"
-          exit 1
-        fi
-        if ! printf '%s' "${serial}" | grep -Eq '^urn:uuid:[0-9a-fA-F-]+$'; then
-          echo "::error::sbom-serial-number must be of the form 'urn:uuid:<uuid>' (got: ${serial})"
-          exit 1
-        fi
-
-        generate_args=(
-          --config-file "${INPUT_CONFIG_FILE}"
-          --llm "${INPUT_LLM_PROVIDER}"
-          --llm-batch-size "${INPUT_LLM_BATCH_SIZE}"
-          --input-format "${INPUT_FORMAT}"
-          --sbom-serial-number "${serial}"
-          --sbom-version "${INPUT_SBOM_VERSION}"
-        )
-        if [ -n "${INPUT_DEBUG_DIR}" ]; then
-          generate_args+=(--debug-dir "${INPUT_DEBUG_DIR}")
-        fi
-
-        vens generate "${generate_args[@]}" "${INPUT_REPORT}" "${INPUT_OUTPUT_VEX}"
+        vens generate \
+          --config-file "${INPUT_CONFIG_FILE}" \
+          --llm "${INPUT_LLM_PROVIDER}" \
+          --llm-batch-size "${INPUT_LLM_BATCH_SIZE}" \
+          --input-format "${INPUT_FORMAT}" \
+          --sbom-serial-number "${INPUT_SBOM_SERIAL}" \
+          --sbom-version "${INPUT_SBOM_VERSION}" \
+          "${INPUT_REPORT}" "${INPUT_OUTPUT_VEX}"
 
         echo "vex-file=${INPUT_OUTPUT_VEX}" >> "${GITHUB_OUTPUT}"
-        echo "sbom-serial-number=${serial}" >> "${GITHUB_OUTPUT}"
 
         if [ "${INPUT_ENRICH}" = "true" ]; then
-          vens enrich \
-            --vex "${INPUT_OUTPUT_VEX}" \
-            --output "${INPUT_ENRICHED_OUT}" \
-            "${INPUT_REPORT}"
+          vens enrich --vex "${INPUT_OUTPUT_VEX}" --output "${INPUT_ENRICHED_OUT}" "${INPUT_REPORT}"
           echo "enriched-report=${INPUT_ENRICHED_OUT}" >> "${GITHUB_OUTPUT}"
         else
           echo "enriched-report=" >> "${GITHUB_OUTPUT}"
+        fi
+
+        if ! counts=$(jq -e '
+          [.vulnerabilities[]?.ratings[]? | select(.method == "OWASP") | .severity]
+          | { critical: map(select(. == "critical")) | length,
+              high:     map(select(. == "high"))     | length,
+              medium:   map(select(. == "medium"))   | length,
+              low:      map(select(. == "low"))      | length,
+              info:     map(select(. == "info"))     | length }
+        ' "${INPUT_OUTPUT_VEX}" 2>&1); then
+          echo "::error::failed to parse OWASP ratings from ${INPUT_OUTPUT_VEX} — vens may have produced a malformed VEX"
+          exit 1
+        fi
+        crit=$(jq -r .critical <<<"${counts}")
+        high=$(jq -r .high     <<<"${counts}")
+        med=$(jq  -r .medium   <<<"${counts}")
+        low=$(jq  -r .low      <<<"${counts}")
+        info=$(jq -r .info     <<<"${counts}")
+        total=$(( crit + high + med + low + info ))
+        {
+          echo "count-critical=${crit}"
+          echo "count-high=${high}"
+          echo "count-medium=${med}"
+          echo "count-low=${low}"
+          echo "count-info=${info}"
+        } >> "${GITHUB_OUTPUT}"
+        echo "OWASP counts: critical=${crit} high=${high} medium=${med} low=${low} info=${info} (total=${total})"
+
+        if [ -n "${INPUT_FAIL_ON_SEVERITY}" ]; then
+          case "${INPUT_FAIL_ON_SEVERITY}" in
+            critical) over=${crit} ;;
+            high)     over=$(( crit + high )) ;;
+            medium)   over=$(( crit + high + med )) ;;
+            low)      over=$(( crit + high + med + low )) ;;
+            info)     over=${total} ;;
+            *) echo "::error::fail-on-severity must be one of: critical, high, medium, low, info (got: $(_safe "${INPUT_FAIL_ON_SEVERITY}"))"; exit 1 ;;
+          esac
+          if [ "${total}" -eq 0 ]; then
+            echo "::error::fail-on-severity is set but the VEX has no OWASP ratings — refusing to evaluate a silent gate. Check the vens run logs."
+            exit 1
+          fi
+          if [ "${over}" -gt 0 ]; then
+            echo "::error::${over} vulnerability(ies) at or above severity '${INPUT_FAIL_ON_SEVERITY}'"
+            exit 1
+          fi
         fi

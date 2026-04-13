@@ -1,8 +1,10 @@
 # vens-action
 
-GitHub Action for [vens](https://github.com/venslabs/vens) — context-aware vulnerability prioritization with OWASP risk scoring and CycloneDX VEX output.
+GitHub Action for [vens](https://github.com/venslabs/vens) — prioritize vulnerabilities by real risk, not just CVSS.
 
-Drop this action into your pipeline after a Trivy or Grype scan step to get a contextual VEX file (and optionally an enriched report) — without installing Go or managing binaries yourself.
+Drop it into your pipeline after a Trivy or Grype scan. It re-scores every CVE in your project's context (exposure, data sensitivity, controls) and produces a CycloneDX VEX file plus severity counts you can use to fail the build.
+
+> **v0.1.0 — first release.** Intentionally minimal.
 
 ## Quick start
 
@@ -11,46 +13,51 @@ Drop this action into your pipeline after a Trivy or Grype scan step to get a co
   run: trivy image python:3.11-slim --format json --output report.json
 
 - name: Prioritize with vens
-  uses: venslabs/vens-action@v0.3.1
+  id: vens
+  uses: venslabs/vens-action@v0.1.0
   with:
     version: v0.3.1
     config-file: .vens/config.yaml
     input-report: report.json
-    sbom-serial-number: ${{ vars.SBOM_SERIAL }}  # urn:uuid:<stable-uuid-per-service>
+    sbom-serial-number: ${{ vars.SBOM_SERIAL }}
     llm-provider: openai
     llm-model: gpt-4o
     llm-api-key: ${{ secrets.OPENAI_API_KEY }}
+    fail-on-severity: critical
     enrich: "true"
 
 - uses: actions/upload-artifact@v4
   with:
-    name: vens-output
+    name: vens
     path: |
-      vens-vex.cdx.json
-      vens-enriched.json
+      ${{ steps.vens.outputs.vex-file }}
+      ${{ steps.vens.outputs.enriched-report }}
 ```
+
+## `sbom-serial-number`
+
+This is the **serial number of the SBOM that your scanner report was produced from** — the `urn:uuid:<uuid>` stored in the SBOM's `serialNumber` field. vens uses it as the BOM-Link anchor so the VEX output references the correct SBOM.
 
 ## Inputs
 
 | Name | Required | Default | Description |
 |---|---|---|---|
-| `version` | yes* | — | vens release tag to install (e.g. `v0.3.1`). Ignored when `bin-path` is set. `latest` is not yet supported. |
-| `bin-path` | yes* | — | Path to a pre-installed vens binary. Skips download and checksum verification. Useful for air-gapped environments and custom builds. |
-| `config-file` | yes | — | Path to `config.yaml` describing project context (exposure, data sensitivity, etc.). |
-| `input-report` | yes | — | Path to the Trivy or Grype JSON scan report. |
-| `input-format` | no | `auto` | Scanner format: `auto` \| `trivy` \| `grype`. |
-| `output-vex` | no | `vens-vex.cdx.json` | Output path for the generated CycloneDX VEX. |
-| `sbom-serial-number` | yes | — | BOM-Link serial of the SBOM the scan report was produced from (`urn:uuid:<uuid>`). Pin one stable UUID per service and reuse it across runs. |
+| `version` | yes\* | — | vens release tag (e.g. `v0.3.1`). Ignored when `bin-path` is set. |
+| `bin-path` | yes\* | — | Path to a pre-installed vens binary. For air-gapped runners and custom builds. |
+| `config-file` | yes | — | Path to `config.yaml` describing project context. See [vens config reference](https://github.com/venslabs/vens#configuration). |
+| `input-report` | yes | — | Trivy or Grype JSON scan report. |
+| `input-format` | no | `auto` | `auto` \| `trivy` \| `grype`. |
+| `output-vex` | no | `$RUNNER_TEMP/vens-vex.cdx.json` | Output path for the CycloneDX VEX. |
+| `sbom-serial-number` | yes | — | `urn:uuid:<uuid>` — see section above. |
 | `sbom-version` | no | `1` | BOM-Link version integer. |
 | `llm-provider` | no | `openai` | `openai` \| `anthropic` \| `googleai` \| `ollama` \| `mock`. |
-| `llm-model` | no | *(provider default)* | Model name (mapped to `<PROVIDER>_MODEL`). |
-| `llm-api-key` | no | — | API key for the selected provider. Masked in logs. |
-| `llm-base-url` | no | — | Custom base URL (OpenAI-compatible endpoints or Ollama host). |
+| `llm-model` | no | *(provider default)* | Mapped to `<PROVIDER>_MODEL`. |
+| `llm-api-key` | no | — | Masked in logs. Mapped to `<PROVIDER>_API_KEY`. |
+| `llm-base-url` | no | — | Custom base URL (OpenAI-compatible endpoint or Ollama host). |
 | `llm-batch-size` | no | `10` | CVEs per LLM request. |
-| `enrich` | no | `false` | If `true`, also run `vens enrich` to produce an enriched Trivy report. |
-| `output-enriched-report` | no | `vens-enriched.json` | Output path for the enriched report. |
-| `debug-dir` | no | — | Dump LLM prompts and responses to this directory. |
-| `working-directory` | no | `.` | Working directory for the run. |
+| `enrich` | no | `false` | Also run `vens enrich` to emit an enriched Trivy report. |
+| `output-enriched-report` | no | `$RUNNER_TEMP/vens-enriched.json` | Output path for the enriched report. |
+| `fail-on-severity` | no | — | Fail the step when a CVE is rated at or above this OWASP level: `critical` \| `high` \| `medium` \| `low` \| `info`. |
 
 \* One of `version` or `bin-path` must be set.
 
@@ -58,40 +65,34 @@ Drop this action into your pipeline after a Trivy or Grype scan step to get a co
 
 | Name | Description |
 |---|---|
-| `vex-file` | Path to the generated CycloneDX VEX file. |
+| `vex-file` | Path to the CycloneDX VEX. |
 | `enriched-report` | Path to the enriched Trivy report (empty when `enrich=false`). |
-| `sbom-serial-number` | Echoes back the serial passed in (convenience for downstream steps). |
-| `version` | vens version that was installed. |
+| `sbom-serial-number` | Echoes back the serial passed in. |
+| `version` | vens version installed (empty when `bin-path` is used). |
+| `count-critical` / `-high` / `-medium` / `-low` / `-info` | CVE counts per OWASP severity bucket. |
 
-## LLM provider mapping
+## Self-hosted and air-gapped runners
 
-The action maps `llm-api-key` and `llm-model` to the correct environment variables based on `llm-provider`:
-
-| `llm-provider` | API key env | Model env | Base URL env |
-|---|---|---|---|
-| `openai` | `OPENAI_API_KEY` | `OPENAI_MODEL` | `OPENAI_BASE_URL` |
-| `anthropic` | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` | — |
-| `googleai` | `GOOGLE_API_KEY` | `GOOGLE_MODEL` | — |
-| `ollama` | — | `OLLAMA_MODEL` | `OLLAMA_HOST` |
-| `mock` | — | — | — |
-
-The API key is masked via `::add-mask::` before any other step runs.
-
-## Supported runners
-
-- `ubuntu-*` (x64, arm64)
-- `macos-*` (x64, arm64)
-
-Windows runners are not yet supported — the action fails fast with a clear error.
-
-## Versioning
-
-Pin the action to a vens release:
+Pre-install the vens binary and pass `bin-path` instead of `version`:
 
 ```yaml
-uses: venslabs/vens-action@v0.3.1
+- uses: venslabs/vens-action@v0.1.0
+  with:
+    bin-path: /opt/bin/vens
+    config-file: .vens/config.yaml
+    input-report: report.json
+    sbom-serial-number: ${{ vars.SBOM_SERIAL }}
+    llm-provider: ollama
+    llm-base-url: http://ollama.corp.example:11434
+    llm-model: llama3.1
 ```
+
+## Notes
+
+- Linux (x64, arm64) and macOS (x64, arm64). Windows fails fast. `jq` must be on the runner (preinstalled on GitHub-hosted).
+- For every CVE, the action POSTs the CVE details + your `config-file` fields to the chosen LLM provider. Use `ollama` for self-hosted models, or `mock` in CI where you don't want to spend tokens.
+- Pin the action by commit SHA for reproducibility: `uses: venslabs/vens-action@<40-char-sha>`. Dependabot and Renovate both track SHA-pinned actions.
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE).
+Apache-2.0 — see [LICENSE](LICENSE).
