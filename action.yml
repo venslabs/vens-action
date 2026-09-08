@@ -1,5 +1,5 @@
 name: vens-action
-description: Prioritize vulnerabilities by real risk, not just CVSS
+description: Prioritize vulnerabilities by real risk, not just the generic CVSS score
 author: fahedouch
 branding:
   icon: shield
