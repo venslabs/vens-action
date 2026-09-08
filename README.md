@@ -1,6 +1,6 @@
 # vens-action
 
-GitHub Action for [vens](https://github.com/venslabs/vens) — prioritize vulnerabilities by real risk, not just CVSS.
+GitHub Action for [vens](https://github.com/venslabs/vens) — prioritize vulnerabilities by real risk, not just the generic CVSS score.
 
 Drop it into your pipeline after a Trivy or Grype scan. It re-scores every CVE in your project's context (exposure, data sensitivity, controls) and produces a CycloneDX VEX file plus severity counts you can use to fail the build.
 
