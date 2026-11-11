@@ -55,7 +55,7 @@ inputs:
     description: "Output path for the enriched report (when enrich=true)"
     default: ${{ runner.temp }}/vens-enriched.json
   fail-on-severity:
-    description: "Gate the build: fail the step when the VEX contains at least one CVE scored at or above this OWASP level (critical | high | medium | low | info). Leave empty to never fail."
+    description: "Gate the build: fail the step when the VEX contains at least one CVE scored at or above this OWASP level (critical | high | medium | low | info; info fails on any rated CVE). A CVE without an OWASP rating, or with a severity outside these five, fails it too. Leave empty to never fail."
     default: ""
 
 outputs:
@@ -93,6 +93,21 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Check inputs
+      shell: bash
+      env:
+        INPUT_FAIL_ON_SEVERITY: ${{ inputs.fail-on-severity }}
+      run: |
+        set -euo pipefail
+
+        case "${INPUT_FAIL_ON_SEVERITY}" in
+          ""|critical|high|medium|low|info) ;;
+          *)
+            echo "::error::fail-on-severity must be one of: critical, high, medium, low, info (got: $(printf '%s' "${INPUT_FAIL_ON_SEVERITY}" | tr '\n\r' '  '))"
+            exit 1
+            ;;
+        esac
+
     - name: Install vens
       shell: bash
       env:
@@ -246,12 +261,17 @@ runs:
         fi
 
         if ! counts=$(jq -e '
-          [.vulnerabilities[]?.ratings[]? | select(.method == "OWASP") | .severity]
-          | { critical: map(select(. == "critical")) | length,
-              high:     map(select(. == "high"))     | length,
-              medium:   map(select(. == "medium"))   | length,
-              low:      map(select(. == "low"))      | length,
-              info:     map(select(. == "info"))     | length }
+          [.vulnerabilities[]?] as $vulns
+          | [$vulns[] | .ratings[]? | select(.method == "OWASP") | (.severity // "(none)" | tostring | ascii_downcase)] as $sev
+          | { vulns:    ($vulns | length),
+              unrated:  ([$vulns[] | select(any(.ratings[]?; .method == "OWASP") | not)] | length),
+              total:    ($sev | length),
+              critical: ($sev | map(select(. == "critical")) | length),
+              high:     ($sev | map(select(. == "high"))     | length),
+              medium:   ($sev | map(select(. == "medium"))   | length),
+              low:      ($sev | map(select(. == "low"))      | length),
+              info:     ($sev | map(select(. == "info"))     | length),
+              unknown:  ($sev | map(select(. != "critical" and . != "high" and . != "medium" and . != "low" and . != "info")) | unique | join(", ")) }
         ' "${INPUT_OUTPUT_VEX}" 2>&1); then
           echo "::error::failed to parse OWASP ratings from ${INPUT_OUTPUT_VEX} — vens may have produced a malformed VEX"
           exit 1
@@ -261,7 +281,11 @@ runs:
         med=$(jq  -r .medium   <<<"${counts}")
         low=$(jq  -r .low      <<<"${counts}")
         info=$(jq -r .info     <<<"${counts}")
-        total=$(( crit + high + med + low + info ))
+        total=$(jq -r .total   <<<"${counts}")
+        vulns=$(jq -r .vulns   <<<"${counts}")
+        unrated=$(jq -r .unrated <<<"${counts}")
+        unknown_list=$(jq -r .unknown <<<"${counts}")
+        unknown=$(( total - crit - high - med - low - info ))
         {
           echo "count-critical=${crit}"
           echo "count-high=${high}"
@@ -270,22 +294,39 @@ runs:
           echo "count-info=${info}"
         } >> "${GITHUB_OUTPUT}"
         echo "OWASP counts: critical=${crit} high=${high} medium=${med} low=${low} info=${info} (total=${total})"
+        if [ "${unknown}" -gt 0 ]; then
+          echo "::warning::${unknown} OWASP rating(s) with a severity this action does not know: $(_safe "${unknown_list}")"
+        fi
+        if [ "${unrated}" -gt 0 ]; then
+          echo "::warning::${unrated} vulnerability(ies) in the VEX have no OWASP rating"
+        fi
 
         if [ -n "${INPUT_FAIL_ON_SEVERITY}" ]; then
-          case "${INPUT_FAIL_ON_SEVERITY}" in
-            critical) over=${crit} ;;
-            high)     over=$(( crit + high )) ;;
-            medium)   over=$(( crit + high + med )) ;;
-            low)      over=$(( crit + high + med + low )) ;;
-            info)     over=${total} ;;
-            *) echo "::error::fail-on-severity must be one of: critical, high, medium, low, info (got: $(_safe "${INPUT_FAIL_ON_SEVERITY}"))"; exit 1 ;;
-          esac
-          if [ "${total}" -eq 0 ]; then
-            echo "::error::fail-on-severity is set but the VEX has no OWASP ratings — refusing to evaluate a silent gate. Check the vens run logs."
+          if [ "${vulns}" -eq 0 ]; then
+            # vens writes an empty VEX for a clean report; an empty VEX for a report with findings means nothing was scored.
+            if ! reported=$(jq -e '([(.Results? // [])[]? | (.Vulnerabilities? // [])[]?] | length) + ([(.matches? // [])[]?] | length)' "${INPUT_REPORT}" 2>&1); then
+              echo "::error::failed to count the vulnerabilities in ${INPUT_REPORT}"
+              exit 1
+            fi
+            if [ "${reported}" -gt 0 ]; then
+              echo "::error::the scan report has ${reported} vulnerability(ies) but the VEX has none — refusing to evaluate a silent gate. Check the vens run logs."
+              exit 1
+            fi
+            echo "fail-on-severity: the scan report has no vulnerabilities, nothing to gate"
+          elif [ "${unrated}" -gt 0 ] || [ "${unknown}" -gt 0 ]; then
+            echo "::error::fail-on-severity cannot place ${unrated} unrated vulnerability(ies) and ${unknown} rating(s) of unknown severity — failing instead of letting them through"
             exit 1
-          fi
-          if [ "${over}" -gt 0 ]; then
-            echo "::error::${over} vulnerability(ies) at or above severity '${INPUT_FAIL_ON_SEVERITY}'"
-            exit 1
+          else
+            case "${INPUT_FAIL_ON_SEVERITY}" in
+              critical) over=${crit} ;;
+              high)     over=$(( crit + high )) ;;
+              medium)   over=$(( crit + high + med )) ;;
+              low)      over=$(( crit + high + med + low )) ;;
+              info)     over=$(( crit + high + med + low + info )) ;;
+            esac
+            if [ "${over}" -gt 0 ]; then
+              echo "::error::${over} vulnerability(ies) at or above severity '${INPUT_FAIL_ON_SEVERITY}'"
+              exit 1
+            fi
           fi
         fi

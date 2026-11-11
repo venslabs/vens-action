@@ -57,7 +57,7 @@ This is the **serial number of the SBOM that your scanner report was produced fr
 | `llm-batch-size` | no | `10` | CVEs per LLM request. |
 | `enrich` | no | `false` | Also run `vens enrich` to emit an enriched Trivy report. |
 | `output-enriched-report` | no | `$RUNNER_TEMP/vens-enriched.json` | Output path for the enriched report. |
-| `fail-on-severity` | no | — | Fail the step when a CVE is rated at or above this OWASP level: `critical` \| `high` \| `medium` \| `low` \| `info`. |
+| `fail-on-severity` | no | — | Fail the step when a CVE is rated at or above this OWASP level: `critical` \| `high` \| `medium` \| `low` \| `info` (`info` = any rated CVE). See the gate note below. |
 | `attest` | no | `false` | Also emit a [CycloneDX Attestations (CDXA)](https://cyclonedx.org/capabilities/attestations/) sidecar next to the VEX, recording how each CVE was scored (model, seed, prompt/input/config hashes, raw LLM response). Evidence, not a cryptographic signature. |
 
 \* One of `version` or `bin-path` must be set.
@@ -94,6 +94,7 @@ Pre-install the vens binary and pass `bin-path` instead of `version`:
 - Linux (x64, arm64) and macOS (x64, arm64). Windows fails fast. `jq` must be on the runner (preinstalled on GitHub-hosted).
 - For every CVE, the action POSTs the CVE details + your `config-file` fields to the chosen LLM provider. Use `ollama` for self-hosted models, or `mock` in CI where you don't want to spend tokens.
 - Pin the action by commit SHA for reproducibility: `uses: venslabs/vens-action@<40-char-sha>`. Dependabot and Renovate both track SHA-pinned actions.
+- `fail-on-severity` is checked before vens runs, so a typo costs no LLM call. The gate fails on a CVE it cannot place (no OWASP rating, or a severity outside the five levels) instead of letting it through, and on an empty VEX when the scan report has findings. A scan report with no vulnerabilities passes.
 
 ## License
 
