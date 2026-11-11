@@ -108,7 +108,12 @@ runs:
             echo "::error::bin-path is not an executable: $(_safe "${BIN_PATH}")"
             exit 1
           fi
-          bin_dir=$(cd "$(dirname "${BIN_PATH}")" && pwd)
+          # GITHUB_PATH takes a Windows path on Windows; Git Bash's plain pwd gives /d/...
+          if [ "${RUNNER_OS}" = Windows ]; then
+            bin_dir=$(cd "$(dirname "${BIN_PATH}")" && pwd -W)
+          else
+            bin_dir=$(cd "$(dirname "${BIN_PATH}")" && pwd)
+          fi
           echo "${bin_dir}" >> "${GITHUB_PATH}"
           "${BIN_PATH}" --version
           exit 0
@@ -119,10 +124,12 @@ runs:
           exit 1
         fi
 
+        exe=vens
         case "${RUNNER_OS}" in
-          Linux)  os=linux ;;
-          macOS)  os=darwin ;;
-          *) echo "::error::unsupported runner OS: ${RUNNER_OS} (Linux or macOS only)"; exit 1 ;;
+          Linux)   os=linux ;;
+          macOS)   os=darwin ;;
+          Windows) os=windows; exe=vens.exe ;;
+          *) echo "::error::unsupported runner OS: ${RUNNER_OS} (Linux, macOS or Windows)"; exit 1 ;;
         esac
         case "${RUNNER_ARCH}" in
           X64)   arch=amd64 ;;
@@ -142,15 +149,27 @@ runs:
         tarball="vens-${VERSION}-${os}-${arch}.tar.gz"
         base="https://github.com/venslabs/vens/releases/download/${VERSION}"
 
-        curl -fsSL --proto '=https' --tlsv1.2 -o "${tarball}" "${base}/${tarball}"
+        if ! curl -fsSL --proto '=https' --tlsv1.2 -o "${tarball}" "${base}/${tarball}"; then
+          if [ "${os}" = windows ]; then
+            echo "::error::could not download ${tarball}: vens publishes Windows archives from v0.6.0 on"
+          else
+            echo "::error::could not download ${tarball} from ${base}"
+          fi
+          exit 1
+        fi
         curl -fsSL --proto '=https' --tlsv1.2 -o SHA256SUMS "${base}/SHA256SUMS"
-        grep -F "  ${tarball}" SHA256SUMS | shasum -a 256 -c -
+        # Git Bash on Windows has sha256sum but not always shasum; macOS has shasum.
+        if command -v sha256sum >/dev/null 2>&1; then
+          grep -F "  ${tarball}" SHA256SUMS | sha256sum -c -
+        else
+          grep -F "  ${tarball}" SHA256SUMS | shasum -a 256 -c -
+        fi
 
         tar -xzf "${tarball}"
-        chmod +x ./vens
+        chmod +x "./${exe}"
         rm -f "${tarball}" SHA256SUMS
         echo "${dir}" >> "${GITHUB_PATH}"
-        ./vens --version
+        "./${exe}" --version
 
     - name: Run vens
       id: run
@@ -177,6 +196,8 @@ runs:
         _safe() { printf '%s' "${1-}" | tr '\n\r' '  '; }
 
         command -v jq >/dev/null 2>&1 || { echo "::error::jq is required on the runner but was not found on PATH"; exit 1; }
+        # jq.exe on Windows ends lines with CRLF, and bash would keep the CR in every value it reads.
+        jq() { command jq "$@" | tr -d '\r'; }
 
         if [ -n "${INPUT_LLM_API_KEY}" ]; then
           echo "::add-mask::$(printf '%s' "${INPUT_LLM_API_KEY}" | tr -d '\n\r')"

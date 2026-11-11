@@ -91,7 +91,7 @@ Pre-install the vens binary and pass `bin-path` instead of `version`:
 
 ## Notes
 
-- Linux (x64, arm64) and macOS (x64, arm64). Windows fails fast. `jq` must be on the runner (preinstalled on GitHub-hosted).
+- Linux, macOS and Windows (x64, arm64). Windows needs vens v0.6.0 or later, the first release with Windows archives; the action's steps run in Git Bash there. `jq` must be on the runner (Git Bash and `jq` are preinstalled on GitHub-hosted runners).
 - For every CVE, the action POSTs the CVE details + your `config-file` fields to the chosen LLM provider. Use `ollama` for self-hosted models, or `mock` in CI where you don't want to spend tokens.
 - Pin the action by commit SHA for reproducibility: `uses: venslabs/vens-action@<40-char-sha>`. Dependabot and Renovate both track SHA-pinned actions.
 
