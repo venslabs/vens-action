@@ -104,6 +104,10 @@ runs:
         _safe() { printf '%s' "${1-}" | tr '\n\r' '  '; }
 
         if [ -n "${BIN_PATH}" ]; then
+          # A Windows bin-path may use backslashes, which dirname does not split on.
+          if [ "${RUNNER_OS}" = Windows ]; then
+            BIN_PATH=$(cygpath -u "${BIN_PATH}")
+          fi
           if [ ! -x "${BIN_PATH}" ]; then
             echo "::error::bin-path is not an executable: $(_safe "${BIN_PATH}")"
             exit 1
