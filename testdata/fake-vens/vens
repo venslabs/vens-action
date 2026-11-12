@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Test double for the gate job: `generate` copies $FAKE_VEX to the output path instead of scoring.
+set -euo pipefail
+case "${1-}" in
+  --version) echo "fake-vens (test double)" ;;
+  generate) cp "${FAKE_VEX:?FAKE_VEX must name a fixture VEX}" "${@: -1}" ;;
+  *) echo "fake-vens: unsupported command: $*" >&2; exit 1 ;;
+esac
