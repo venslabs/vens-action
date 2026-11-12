@@ -262,7 +262,7 @@ runs:
 
         if ! counts=$(jq -e '
           [.vulnerabilities[]?] as $vulns
-          | [$vulns[] | .ratings[]? | select(.method == "OWASP") | (.severity // "(none)" | tostring | ascii_downcase)] as $sev
+          | [$vulns[] | .ratings[]? | select(.method == "OWASP") | (.severity // "(none)" | tostring | ascii_downcase | if . == "" then "(empty)" else . end)] as $sev
           | { vulns:    ($vulns | length),
               unrated:  ([$vulns[] | select(any(.ratings[]?; .method == "OWASP") | not)] | length),
               total:    ($sev | length),

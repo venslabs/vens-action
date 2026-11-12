@@ -21,6 +21,16 @@
           "severity": "note"
         }
       ]
+    },
+    {
+      "id": "CVE-2099-0003",
+      "ratings": [
+        {
+          "method": "OWASP",
+          "score": 5,
+          "severity": ""
+        }
+      ]
     }
   ]
 }
