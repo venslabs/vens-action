@@ -289,6 +289,36 @@ jobs:
           llm-provider: mock
           fail-on-severity: low
 
+      - name: An empty severity alone fails the gate
+        id: emptysev
+        continue-on-error: true
+        uses: ./
+        env:
+          FAKE_VEX: testdata/vex/empty-severity.cdx.json
+        with:
+          bin-path: testdata/fake-vens/vens
+          config-file: testdata/config.yaml
+          input-report: ${{ steps.reports.outputs.findings }}
+          output-vex: ${{ runner.temp }}/fake-emptysev.cdx.json
+          sbom-serial-number: ${{ env.SBOM_SERIAL }}
+          llm-provider: mock
+          fail-on-severity: critical
+
+      - name: info fails on any rated CVE
+        id: infogate
+        continue-on-error: true
+        uses: ./
+        env:
+          FAKE_VEX: testdata/vex/below-medium.cdx.json
+        with:
+          bin-path: testdata/fake-vens/vens
+          config-file: testdata/config.yaml
+          input-report: ${{ steps.reports.outputs.findings }}
+          output-vex: ${{ runner.temp }}/fake-info.cdx.json
+          sbom-serial-number: ${{ env.SBOM_SERIAL }}
+          llm-provider: mock
+          fail-on-severity: info
+
       - name: Assert the fixture gates failed after the VEX was written
         shell: bash
         env:
@@ -296,7 +326,9 @@ jobs:
           UNRATED: ${{ steps.unrated.outcome }}
           UPPER: ${{ steps.upper.outcome }}
           EMPTYVEX: ${{ steps.emptyvex.outcome }}
+          EMPTYSEV: ${{ steps.emptysev.outcome }}
+          INFOGATE: ${{ steps.infogate.outcome }}
         run: |
           set -euo pipefail
-          for outcome in "${UNKNOWN}" "${UNRATED}" "${UPPER}" "${EMPTYVEX}"; do test "${outcome}" = failure; done
-          for name in unknown unrated upper empty; do test -s "${RUNNER_TEMP}/fake-${name}.cdx.json"; done
+          for outcome in "${UNKNOWN}" "${UNRATED}" "${UPPER}" "${EMPTYVEX}" "${EMPTYSEV}" "${INFOGATE}"; do test "${outcome}" = failure; done
+          for name in unknown unrated upper empty emptysev info; do test -s "${RUNNER_TEMP}/fake-${name}.cdx.json"; done

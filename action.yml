@@ -273,7 +273,7 @@ runs:
               info:     ($sev | map(select(. == "info"))     | length),
               unknown:  ($sev | map(select(. != "critical" and . != "high" and . != "medium" and . != "low" and . != "info")) | unique | join(", ")) }
         ' "${INPUT_OUTPUT_VEX}" 2>&1); then
-          echo "::error::failed to parse OWASP ratings from ${INPUT_OUTPUT_VEX} — vens may have produced a malformed VEX"
+          echo "::error::failed to parse OWASP ratings from $(_safe "${INPUT_OUTPUT_VEX}") — vens may have produced a malformed VEX"
           exit 1
         fi
         crit=$(jq -r .critical <<<"${counts}")
@@ -305,7 +305,7 @@ runs:
           if [ "${vulns}" -eq 0 ]; then
             # vens writes an empty VEX for a clean report; an empty VEX for a report with findings means nothing was scored.
             if ! reported=$(jq -e '([(.Results? // [])[]? | (.Vulnerabilities? // [])[]?] | length) + ([(.matches? // [])[]?] | length)' "${INPUT_REPORT}" 2>&1); then
-              echo "::error::failed to count the vulnerabilities in ${INPUT_REPORT}"
+              echo "::error::failed to count the vulnerabilities in $(_safe "${INPUT_REPORT}")"
               exit 1
             fi
             if [ "${reported}" -gt 0 ]; then
