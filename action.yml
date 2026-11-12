@@ -7,7 +7,7 @@ branding:
 
 inputs:
   version:
-    description: "vens release tag to install (e.g. v0.3.2). Ignored when bin-path is set."
+    description: "vens release tag to install (e.g. v0.6.0). Ignored when bin-path is set."
     default: ""
   bin-path:
     description: "Path to a pre-installed vens binary, named vens (vens.exe on Windows, where .exe may be left out). Skips download. Use for air-gapped runners and custom builds."
