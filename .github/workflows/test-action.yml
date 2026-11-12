@@ -19,8 +19,12 @@ permissions:
 
 jobs:
   windows:
-    name: windows-latest · install and run
-    runs-on: windows-latest
+    name: ${{ matrix.os }} · install and run
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-11-arm]
     env:
       VENS_VERSION: v0.6.0
       SBOM_SERIAL: urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79
@@ -101,6 +105,23 @@ jobs:
             */custom-bin/vens*) ;;
             *) echo "vens resolves to $(command -v vens), not the bin-path dir"; exit 1 ;;
           esac
+
+      - name: Run vens action from a bin-path without .exe
+        uses: ./
+        with:
+          bin-path: ${{ runner.temp }}\custom-bin\vens
+          config-file: testdata/config.yaml
+          input-report: ${{ steps.report.outputs.report }}
+          input-format: trivy
+          output-vex: ${{ runner.temp }}/vex-noexe.cdx.json
+          sbom-serial-number: ${{ env.SBOM_SERIAL }}
+          llm-provider: mock
+
+      - name: Assert the bin-path without .exe ran vens
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '[.vulnerabilities[] | select(.ratings[]?.method == "OWASP")] | length == 2' "${RUNNER_TEMP}/vex-noexe.cdx.json"
 
       - name: Gate on Windows
         id: gate

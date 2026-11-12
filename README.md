@@ -43,7 +43,7 @@ This is the **serial number of the SBOM that your scanner report was produced fr
 | Name | Required | Default | Description |
 |---|---|---|---|
 | `version` | yes\* | — | vens release tag (e.g. `v0.4.0`). Ignored when `bin-path` is set. |
-| `bin-path` | yes\* | — | Path to a pre-installed vens binary. For air-gapped runners and custom builds. |
+| `bin-path` | yes\* | — | Path to a pre-installed vens binary, named `vens` (`vens.exe` on Windows, where `.exe` may be left out): the action puts its directory on `PATH` and calls `vens`. For air-gapped runners and custom builds. |
 | `config-file` | yes | — | Path to `config.yaml` describing project context. See [vens config reference](https://github.com/venslabs/vens#configuration). |
 | `input-report` | yes | — | Trivy or Grype JSON scan report. |
 | `input-format` | no | `auto` | `auto` \| `trivy` \| `grype`. |
