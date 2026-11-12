@@ -10,7 +10,7 @@ inputs:
     description: "vens release tag to install (e.g. v0.3.2). Ignored when bin-path is set."
     default: ""
   bin-path:
-    description: "Path to a pre-installed vens binary. Skips download. Use for air-gapped runners and custom builds."
+    description: "Path to a pre-installed vens binary, named vens (vens.exe on Windows, where .exe may be left out). Skips download. Use for air-gapped runners and custom builds."
     default: ""
   config-file:
     description: "Path to config.yaml describing project context"
@@ -144,7 +144,9 @@ runs:
           *) echo "::error::unsupported runner arch: ${RUNNER_ARCH}"; exit 1 ;;
         esac
 
-        if ! printf '%s' "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$'; then
+        # A bash match tests the whole value; grep tested each line, so a newline could slip through.
+        semver='^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$'
+        if ! [[ ${VERSION} =~ ${semver} ]]; then
           echo "::error::version must be a semver tag like v0.1.0 (got: $(_safe "${VERSION}"))"
           exit 1
         fi
@@ -157,16 +159,15 @@ runs:
         base="https://github.com/venslabs/vens/releases/download/${VERSION}"
 
         if ! curl -fsSL --proto '=https' --tlsv1.2 -o "${tarball}" "${base}/${tarball}"; then
+          echo "::error::could not download $(_safe "${tarball}") from $(_safe "${base}")"
           if [ "${os}" = windows ]; then
-            echo "::error::could not download ${tarball}: vens publishes Windows archives from v0.6.0 on"
-          else
-            echo "::error::could not download ${tarball} from ${base}"
+            echo "::error::vens publishes Windows archives from v0.6.0 on"
           fi
           exit 1
         fi
         curl -fsSL --proto '=https' --tlsv1.2 -o SHA256SUMS "${base}/SHA256SUMS"
-        # Git Bash on Windows has sha256sum but not always shasum; macOS has shasum.
-        if command -v sha256sum >/dev/null 2>&1; then
+        # Git Bash on Windows has sha256sum but not always shasum; elsewhere keep shasum.
+        if [ "${os}" = windows ]; then
           grep -F "  ${tarball}" SHA256SUMS | sha256sum -c -
         else
           grep -F "  ${tarball}" SHA256SUMS | shasum -a 256 -c -

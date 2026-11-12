@@ -16,7 +16,7 @@ Drop it into your pipeline after a Trivy or Grype scan. It re-scores every CVE i
   id: vens
   uses: venslabs/vens-action@v0.2.0
   with:
-    version: v0.4.0
+    version: v0.6.0
     config-file: .vens/config.yaml
     input-report: report.json
     sbom-serial-number: ${{ vars.SBOM_SERIAL }}
@@ -42,7 +42,7 @@ This is the **serial number of the SBOM that your scanner report was produced fr
 
 | Name | Required | Default | Description |
 |---|---|---|---|
-| `version` | yes\* | — | vens release tag (e.g. `v0.4.0`). Ignored when `bin-path` is set. |
+| `version` | yes\* | — | vens release tag (e.g. `v0.6.0`). Ignored when `bin-path` is set. |
 | `bin-path` | yes\* | — | Path to a pre-installed vens binary, named `vens` (`vens.exe` on Windows, where `.exe` may be left out): the action puts its directory on `PATH` and calls `vens`. For air-gapped runners and custom builds. |
 | `config-file` | yes | — | Path to `config.yaml` describing project context. See [vens config reference](https://github.com/venslabs/vens#configuration). |
 | `input-report` | yes | — | Trivy or Grype JSON scan report. |
