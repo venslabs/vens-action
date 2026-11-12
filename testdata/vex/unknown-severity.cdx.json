@@ -1,0 +1,36 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "vulnerabilities": [
+    {
+      "id": "CVE-2099-0001",
+      "ratings": [
+        {
+          "method": "OWASP",
+          "score": 45,
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2099-0002",
+      "ratings": [
+        {
+          "method": "OWASP",
+          "score": 1,
+          "severity": "note"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2099-0003",
+      "ratings": [
+        {
+          "method": "OWASP",
+          "score": 5,
+          "severity": ""
+        }
+      ]
+    }
+  ]
+}
