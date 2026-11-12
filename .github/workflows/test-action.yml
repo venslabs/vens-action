@@ -18,6 +18,134 @@ permissions:
   contents: read
 
 jobs:
+  windows:
+    name: ${{ matrix.os }} · install and run
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-11-arm]
+    env:
+      VENS_VERSION: v0.6.0
+      SBOM_SERIAL: urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      # The integration job's scanner install is Linux and macOS only, so this job checks install and run on a fixed report.
+      - name: Write a scan report
+        id: report
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/scan.json"
+          jq -n '{SchemaVersion: 2, ArtifactName: "windows", ArtifactType: "container_image",
+            Results: [{Target: "windows", Class: "os-pkgs", Type: "debian",
+              Vulnerabilities: [
+                {VulnerabilityID: "CVE-2025-0001", PkgName: "libexample", InstalledVersion: "1.0-1",
+                 PkgIdentifier: {PURL: "pkg:deb/debian/libexample@1.0-1"}, Severity: "HIGH"},
+                {VulnerabilityID: "CVE-2025-0002", PkgName: "libexample", InstalledVersion: "1.0-1",
+                 PkgIdentifier: {PURL: "pkg:deb/debian/libexample@1.0-1"}, Severity: "LOW"}]}]}' > "${out}"
+          echo "report=${out}" >> "${GITHUB_OUTPUT}"
+
+      - name: Run vens action
+        id: vens
+        uses: ./
+        with:
+          version: ${{ env.VENS_VERSION }}
+          config-file: testdata/config.yaml
+          input-report: ${{ steps.report.outputs.report }}
+          input-format: trivy
+          output-vex: ${{ runner.temp }}/vex.cdx.json
+          sbom-serial-number: ${{ env.SBOM_SERIAL }}
+          llm-provider: mock
+          attest: "true"
+          enrich: "true"
+          output-enriched-report: ${{ runner.temp }}/enriched.json
+
+      - name: Copy vens.exe out of the install dir
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/custom-bin"
+          cp "${RUNNER_TEMP}/vens-${VENS_VERSION}/vens.exe" "${RUNNER_TEMP}/custom-bin/vens.exe"
+
+      - name: Run vens action from a backslash bin-path
+        id: binpath
+        uses: ./
+        with:
+          bin-path: ${{ runner.temp }}\custom-bin\vens.exe
+          config-file: testdata/config.yaml
+          input-report: ${{ steps.report.outputs.report }}
+          input-format: trivy
+          output-vex: ${{ runner.temp }}/vex-binpath.cdx.json
+          sbom-serial-number: ${{ env.SBOM_SERIAL }}
+          llm-provider: mock
+
+      - name: Assert outputs
+        shell: bash
+        env:
+          VEX_FILE: ${{ steps.vens.outputs.vex-file }}
+          VEX_BINPATH: ${{ steps.binpath.outputs.vex-file }}
+          ATTESTATION: ${{ steps.vens.outputs.attestation-file }}
+          ENRICHED: ${{ steps.vens.outputs.enriched-report }}
+          COUNTS: ${{ steps.vens.outputs.count-critical }} ${{ steps.vens.outputs.count-high }} ${{ steps.vens.outputs.count-medium }} ${{ steps.vens.outputs.count-low }} ${{ steps.vens.outputs.count-info }}
+        run: |
+          set -euo pipefail
+          for vex in "${VEX_FILE}" "${VEX_BINPATH}"; do
+            jq -e '.bomFormat == "CycloneDX"' "${vex}"
+            jq -e '[.vulnerabilities[] | select(.ratings[]?.method == "OWASP")] | length == 2' "${vex}"
+          done
+          total=0
+          for n in ${COUNTS}; do total=$(( total + n )); done
+          test "${total}" -eq 2
+          test -s "${ATTESTATION}"
+          jq -e '[.Results[]?.Vulnerabilities[]? | select(.Custom.owasp_score != null)] | length == 2' "${ENRICHED}"
+          # bin-path's dir was added to GITHUB_PATH last, so vens must resolve there.
+          case "$(command -v vens)" in
+            */custom-bin/vens*) ;;
+            *) echo "vens resolves to $(command -v vens), not the bin-path dir"; exit 1 ;;
+          esac
+
+      - name: Run vens action from a bin-path without .exe
+        uses: ./
+        with:
+          bin-path: ${{ runner.temp }}\custom-bin\vens
+          config-file: testdata/config.yaml
+          input-report: ${{ steps.report.outputs.report }}
+          input-format: trivy
+          output-vex: ${{ runner.temp }}/vex-noexe.cdx.json
+          sbom-serial-number: ${{ env.SBOM_SERIAL }}
+          llm-provider: mock
+
+      - name: Assert the bin-path without .exe ran vens
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '[.vulnerabilities[] | select(.ratings[]?.method == "OWASP")] | length == 2' "${RUNNER_TEMP}/vex-noexe.cdx.json"
+
+      - name: Gate on Windows
+        id: gate
+        continue-on-error: true
+        uses: ./
+        with:
+          bin-path: ${{ runner.temp }}\custom-bin\vens.exe
+          config-file: testdata/config.yaml
+          input-report: ${{ steps.report.outputs.report }}
+          input-format: trivy
+          output-vex: ${{ runner.temp }}/vex-gate.cdx.json
+          sbom-serial-number: ${{ env.SBOM_SERIAL }}
+          llm-provider: mock
+          fail-on-severity: low
+
+      - name: Assert the gate failed after scoring
+        shell: bash
+        env:
+          OUTCOME: ${{ steps.gate.outcome }}
+        run: |
+          set -euo pipefail
+          test "${OUTCOME}" = failure
+          jq -e '.vulnerabilities | length == 2' "${RUNNER_TEMP}/vex-gate.cdx.json"
+
   integration:
     name: ${{ matrix.os }} · ${{ matrix.scanner.name }} ${{ matrix.scanner.version }}
     runs-on: ${{ matrix.os }}

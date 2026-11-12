@@ -16,7 +16,7 @@ Drop it into your pipeline after a Trivy or Grype scan. It re-scores every CVE i
   id: vens
   uses: venslabs/vens-action@v0.2.0
   with:
-    version: v0.4.0
+    version: v0.6.0
     config-file: .vens/config.yaml
     input-report: report.json
     sbom-serial-number: ${{ vars.SBOM_SERIAL }}
@@ -42,8 +42,8 @@ This is the **serial number of the SBOM that your scanner report was produced fr
 
 | Name | Required | Default | Description |
 |---|---|---|---|
-| `version` | yes\* | — | vens release tag (e.g. `v0.4.0`). Ignored when `bin-path` is set. |
-| `bin-path` | yes\* | — | Path to a pre-installed vens binary. For air-gapped runners and custom builds. |
+| `version` | yes\* | — | vens release tag (e.g. `v0.6.0`). Ignored when `bin-path` is set. |
+| `bin-path` | yes\* | — | Path to a pre-installed vens binary, named `vens` (`vens.exe` on Windows, where `.exe` may be left out): the action puts its directory on `PATH` and calls `vens`. For air-gapped runners and custom builds. |
 | `config-file` | yes | — | Path to `config.yaml` describing project context. See [vens config reference](https://github.com/venslabs/vens#configuration). |
 | `input-report` | yes | — | Trivy or Grype JSON scan report. |
 | `input-format` | no | `auto` | `auto` \| `trivy` \| `grype`. |
@@ -91,7 +91,7 @@ Pre-install the vens binary and pass `bin-path` instead of `version`:
 
 ## Notes
 
-- Linux (x64, arm64) and macOS (x64, arm64). Windows fails fast. `jq` must be on the runner (preinstalled on GitHub-hosted).
+- Linux, macOS and Windows (x64, arm64). Windows needs vens v0.6.0 or later, the first release with Windows archives; the action's steps run in Git Bash there. `jq` must be on the runner (Git Bash and `jq` are preinstalled on GitHub-hosted runners).
 - For every CVE, the action POSTs the CVE details + your `config-file` fields to the chosen LLM provider. Use `ollama` for self-hosted models, or `mock` in CI where you don't want to spend tokens.
 - Pin the action by commit SHA for reproducibility: `uses: venslabs/vens-action@<40-char-sha>`. Dependabot and Renovate both track SHA-pinned actions.
 

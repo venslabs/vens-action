@@ -7,10 +7,10 @@ branding:
 
 inputs:
   version:
-    description: "vens release tag to install (e.g. v0.3.2). Ignored when bin-path is set."
+    description: "vens release tag to install (e.g. v0.6.0). Ignored when bin-path is set."
     default: ""
   bin-path:
-    description: "Path to a pre-installed vens binary. Skips download. Use for air-gapped runners and custom builds."
+    description: "Path to a pre-installed vens binary, named vens (vens.exe on Windows, where .exe may be left out). Skips download. Use for air-gapped runners and custom builds."
     default: ""
   config-file:
     description: "Path to config.yaml describing project context"
@@ -104,11 +104,23 @@ runs:
         _safe() { printf '%s' "${1-}" | tr '\n\r' '  '; }
 
         if [ -n "${BIN_PATH}" ]; then
+          # A Windows bin-path may use backslashes, which dirname does not split on, or leave out .exe.
+          if [ "${RUNNER_OS}" = Windows ]; then
+            BIN_PATH=$(cygpath -u "${BIN_PATH}")
+            if [ "${BIN_PATH%.exe}" = "${BIN_PATH}" ] && [ -f "${BIN_PATH}.exe" ]; then
+              BIN_PATH="${BIN_PATH}.exe"
+            fi
+          fi
           if [ ! -x "${BIN_PATH}" ]; then
             echo "::error::bin-path is not an executable: $(_safe "${BIN_PATH}")"
             exit 1
           fi
-          bin_dir=$(cd "$(dirname "${BIN_PATH}")" && pwd)
+          # GITHUB_PATH takes a Windows path on Windows; Git Bash's plain pwd gives /d/...
+          if [ "${RUNNER_OS}" = Windows ]; then
+            bin_dir=$(cd "$(dirname "${BIN_PATH}")" && pwd -W)
+          else
+            bin_dir=$(cd "$(dirname "${BIN_PATH}")" && pwd)
+          fi
           echo "${bin_dir}" >> "${GITHUB_PATH}"
           "${BIN_PATH}" --version
           exit 0
@@ -119,10 +131,12 @@ runs:
           exit 1
         fi
 
+        exe=vens
         case "${RUNNER_OS}" in
-          Linux)  os=linux ;;
-          macOS)  os=darwin ;;
-          *) echo "::error::unsupported runner OS: ${RUNNER_OS} (Linux or macOS only)"; exit 1 ;;
+          Linux)   os=linux ;;
+          macOS)   os=darwin ;;
+          Windows) os=windows; exe=vens.exe ;;
+          *) echo "::error::unsupported runner OS: ${RUNNER_OS} (Linux, macOS or Windows)"; exit 1 ;;
         esac
         case "${RUNNER_ARCH}" in
           X64)   arch=amd64 ;;
@@ -130,7 +144,9 @@ runs:
           *) echo "::error::unsupported runner arch: ${RUNNER_ARCH}"; exit 1 ;;
         esac
 
-        if ! printf '%s' "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$'; then
+        # A bash match tests the whole value; grep tested each line, so a newline could slip through.
+        semver='^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$'
+        if ! [[ ${VERSION} =~ ${semver} ]]; then
           echo "::error::version must be a semver tag like v0.1.0 (got: $(_safe "${VERSION}"))"
           exit 1
         fi
@@ -142,15 +158,26 @@ runs:
         tarball="vens-${VERSION}-${os}-${arch}.tar.gz"
         base="https://github.com/venslabs/vens/releases/download/${VERSION}"
 
-        curl -fsSL --proto '=https' --tlsv1.2 -o "${tarball}" "${base}/${tarball}"
+        if ! curl -fsSL --proto '=https' --tlsv1.2 -o "${tarball}" "${base}/${tarball}"; then
+          echo "::error::could not download $(_safe "${tarball}") from $(_safe "${base}")"
+          if [ "${os}" = windows ]; then
+            echo "::error::vens publishes Windows archives from v0.6.0 on"
+          fi
+          exit 1
+        fi
         curl -fsSL --proto '=https' --tlsv1.2 -o SHA256SUMS "${base}/SHA256SUMS"
-        grep -F "  ${tarball}" SHA256SUMS | shasum -a 256 -c -
+        # Git Bash on Windows has sha256sum but not always shasum; elsewhere keep shasum.
+        if [ "${os}" = windows ]; then
+          grep -F "  ${tarball}" SHA256SUMS | sha256sum -c -
+        else
+          grep -F "  ${tarball}" SHA256SUMS | shasum -a 256 -c -
+        fi
 
         tar -xzf "${tarball}"
-        chmod +x ./vens
+        chmod +x "./${exe}"
         rm -f "${tarball}" SHA256SUMS
         echo "${dir}" >> "${GITHUB_PATH}"
-        ./vens --version
+        "./${exe}" --version
 
     - name: Run vens
       id: run
@@ -177,6 +204,8 @@ runs:
         _safe() { printf '%s' "${1-}" | tr '\n\r' '  '; }
 
         command -v jq >/dev/null 2>&1 || { echo "::error::jq is required on the runner but was not found on PATH"; exit 1; }
+        # jq.exe on Windows ends lines with CRLF, and bash would keep the CR in every value it reads.
+        jq() { command jq "$@" | tr -d '\r'; }
 
         if [ -n "${INPUT_LLM_API_KEY}" ]; then
           echo "::add-mask::$(printf '%s' "${INPUT_LLM_API_KEY}" | tr -d '\n\r')"
